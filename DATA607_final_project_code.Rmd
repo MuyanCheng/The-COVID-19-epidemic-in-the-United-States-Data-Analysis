@@ -1,0 +1,315 @@
+---
+title: "DATA607 Final Project Code"
+author: "Muyan Cheng"
+date: "12/06/2024"
+output:
+  pdf_document:
+    latex_engine: xelatex
+---
+
+```{r}
+install.packages("COVID19", repos = "https://cloud.r-project.org/")
+library("COVID19")
+df <- covid19(level = 2)
+```
+
+```{r}
+summary(df)
+```
+
+```{r}
+head(df)
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+missing_summary <- df %>%
+  summarise_all(~sum(is.na(.))) %>%
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "MissingCount")
+
+ggplot(missing_summary, aes(x = reorder(Variable, -MissingCount), y = MissingCount)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Missing Data Summary", x = "Variable", y = "Count of Missing Values")
+```
+
+```{r}
+date_counts <- df %>%
+  group_by(date) %>%
+  summarise(Count = n(), .groups = "drop")
+
+ggplot(date_counts, aes(x = date, y = Count)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  labs(title = "Number of Instances Per Date",
+       x = "Date",
+       y = "Count") +
+  theme_minimal()
+```
+
+```{r}
+#library(dplyr)
+library(tidyr)
+library(zoo)
+
+df_processed <- df %>%
+  arrange(administrative_area_level_2, date) %>%
+  group_by(administrative_area_level_2) %>%
+  mutate(
+    deaths = ifelse(is.na(deaths) & date == min(date), 0, deaths),
+    confirmed = ifelse(is.na(confirmed) & date == min(date), 0, confirmed)
+  ) %>%
+  mutate(
+    deaths = zoo::na.locf(deaths, na.rm = FALSE),
+    confirmed = zoo::na.locf(confirmed, na.rm = FALSE)
+  ) %>%
+  ungroup()
+df_now<- df_processed %>%
+  filter(date == "2022-12-31")
+```
+
+```{r}
+country_deaths <- df_now %>%
+  group_by(administrative_area_level_1) %>%
+  summarise(TotalDeaths = sum(deaths, na.rm = TRUE), .groups = "drop")
+
+country_deaths <- country_deaths %>%
+  arrange(desc(TotalDeaths))
+
+ggplot(country_deaths, aes(x = reorder(administrative_area_level_1, TotalDeaths), y = TotalDeaths)) +
+  geom_bar(stat = "identity", fill = "tomato") +
+  coord_flip() + 
+  labs(title = "Deaths by Country on Dec 31 2022",
+       x = "Country",
+       y = "Total Deaths") +
+  theme_minimal()
+
+```
+
+```{r}
+country_comfirmed <- df_now %>%
+  group_by(administrative_area_level_1) %>%
+  summarise(Totalconfirmed = sum(confirmed, na.rm = TRUE), .groups = "drop")
+
+country_comfirmed <- country_comfirmed %>%
+  arrange(desc(Totalconfirmed))
+
+ggplot(country_comfirmed , aes(x = reorder(administrative_area_level_1, Totalconfirmed ), y = Totalconfirmed )) +
+  geom_bar(stat = "identity", fill = "tomato") +
+  coord_flip() + 
+  labs(title = "Confirmed by Country on Dec 31 2022",
+       x = "Country",
+       y = "Total confirmed") +
+  theme_minimal()
+```
+
+```{r}
+df_usa<- df_processed %>%
+  filter(administrative_area_level_1 == "United States")
+head(df_usa)
+```
+
+```{r}
+missing_summary_usa <- df_usa %>%
+  summarise_all(~sum(is.na(.))) %>%
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "MissingCount")
+
+ggplot(missing_summary_usa, aes(x = reorder(Variable, -MissingCount), y = MissingCount)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Missing Data Summary of United States Data", x = "Variable", y = "Count of Missing Values")
+```
+
+```{r}
+# Missing value processing
+cumulative_vars <- c("recovered", "tests", "vaccines", "people_vaccinated", "people_fully_vaccinated")
+
+df_usa_clean <- df_usa %>%
+  arrange(administrative_area_level_2, date) %>%
+  group_by(administrative_area_level_2) %>%
+  mutate(across(all_of(cumulative_vars), ~ifelse(is.na(.) & row_number() == 1, 0, .))) %>%
+  mutate(across(all_of(cumulative_vars), ~zoo::na.locf(., na.rm = FALSE))) %>%
+  ungroup()
+
+policy_vars <- c(
+  "school_closing", "workplace_closing", "cancel_events", "gatherings_restrictions", "transport_closing", "stay_home_restrictions", "internal_movement_restrictions",
+  "international_movement_restrictions", "information_campaigns", "testing_policy",
+  "contact_tracing", "facial_coverings", "vaccination_policy", "elderly_people_protection"
+)
+```
+
+```{r}
+get_mode <- function(x) {
+  if (length(x) == 0 || all(is.na(x))) return(NA)
+  uniq_x <- unique(na.omit(x))
+  uniq_x[which.max(tabulate(match(x, uniq_x)))]
+}
+
+safe_na_locf <- function(x) {
+  if (all(is.na(x))) return(x)
+  na.locf(na.locf(x, na.rm = FALSE), fromLast = TRUE)
+}
+
+df_usa_clean <- df_usa_clean %>%
+  group_by(administrative_area_level_2) %>%
+  mutate(across(all_of(policy_vars), ~ifelse(is.na(.) & row_number() == 1, 0, .))) %>%
+  mutate(across(all_of(policy_vars), ~safe_na_locf(.))) %>%
+  mutate(across(all_of(policy_vars), ~ifelse(is.na(.), get_mode(.[!is.na(.)]), .))) %>%
+  ungroup()
+```
+
+```{r}
+cumulative_features<- c("confirmed","deaths","recovered", "tests", "vaccines", "people_vaccinated", "people_fully_vaccinated")
+df_usa_clean_pro <- df_usa_clean %>%
+  arrange(administrative_area_level_2, date) %>%
+  group_by(administrative_area_level_2) %>%
+  mutate(across(all_of(cumulative_features), ~pmax(., lag(., default = 0)))) %>%
+  mutate(across(all_of(cumulative_features), ~pmin(., lead(., default = tail(., 1))))) %>%
+  mutate(across(all_of(cumulative_features), ~cummax(.))) %>%
+  ungroup()
+df_usa_clean_pro %>%
+  arrange(administrative_area_level_2, date) %>%
+  group_by(administrative_area_level_2) %>%
+  summarise(across(all_of(cumulative_features), ~sum(. < lag(.), na.rm = TRUE)))
+```
+
+```{r}
+df_usa_clean_pro <- df_usa_clean_pro %>%
+  mutate(across(all_of(policy_vars), ~abs(.)))
+```
+
+```{r}
+df_usa_processed <- df_usa_clean_pro%>%
+  select(id, date,deaths, confirmed,all_of(cumulative_vars),all_of(policy_vars),administrative_area_level_1,administrative_area_level_2,population)
+
+df_usa_processed <- df_usa_processed %>%
+  arrange(date) %>%
+  group_by(id) %>%
+  mutate(new_cases = confirmed - lag(confirmed, default = 0))
+df_usa_processed <- df_usa_processed %>%
+  mutate(cases_per_million = (new_cases / population) * 1e6)
+df_usa_processed <- df_usa_processed %>%
+  arrange(date) %>%
+  group_by(id) %>%
+  mutate(new_vaccines = vaccines - lag(vaccines, default = 0))
+df_usa_processed <- df_usa_processed %>%
+  arrange(date) %>%
+  group_by(id) %>%
+  mutate(new_deaths = deaths - lag(deaths, default = 0))
+df_usa_processed <- df_usa_processed %>%
+  mutate(deaths_per_million = (new_deaths / population) * 1e6)
+
+head(df_usa_processed)
+```
+
+```{r}
+summary(df_usa_processed)
+```
+
+```{r}
+ggplot(df_usa_processed, aes(x = date, y = new_cases)) +
+  geom_line() +
+  labs(title = "Daily trend of new cases", x = "date", y = "new cases")
+```
+
+```{r}
+ggplot(df_usa_processed, aes(x = date, y = new_deaths)) +
+  geom_line() +
+  labs(title = "Daily trend of new deaths", x = "date", y = "new deaths")
+```
+
+```{r}
+df_usa_processed %>%
+  group_by(administrative_area_level_2, date) %>%
+  summarise(cases_per_million = sum(cases_per_million, na.rm = TRUE), .groups = "drop") %>%
+  ggplot(aes(x = date, y = reorder(administrative_area_level_2, cases_per_million), fill = cases_per_million)) +
+  geom_tile() +
+  scale_fill_gradient(low = "tomato", high = "black") +
+  labs(title = "Trend of COVID-19 Cases per 100k Population", x = "Date", y = "State")
+```
+
+```{r}
+df_usa_2020 <- df_usa_processed %>%
+  filter(format(date, "%Y") == "2020")
+head(df_usa_2020)
+```
+
+```{r}
+df_usa_2020 %>%
+  group_by(administrative_area_level_2, date) %>%
+  summarise(cases_per_million = sum(cases_per_million, na.rm = TRUE), .groups = "drop") %>%
+  ggplot(aes(x = date, y = reorder(administrative_area_level_2, cases_per_million), fill = cases_per_million)) +
+  geom_tile() +
+  scale_fill_gradient(low = "grey", high = "red") +
+  scale_x_date(date_labels = "%m", date_breaks = "1 month") +
+  labs(title = "Trend of COVID-19 Cases per 100k Population During 2020", x = "Month", y = "State")
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+
+model <- lm(cases_per_million ~ vaccination_policy + school_closing + workplace_closing + 
+              cancel_events + gatherings_restrictions + transport_closing + 
+              stay_home_restrictions + internal_movement_restrictions + 
+              international_movement_restrictions + information_campaigns + 
+              testing_policy + contact_tracing + facial_coverings + elderly_people_protection,
+            data = df_usa_2020)
+
+summary(model)
+
+```
+
+```{r}
+confint(model, level=0.95)
+```
+
+```{r}
+library(broom)
+library(dplyr)
+model_coef <- tidy(model, conf.int=TRUE) %>%
+  filter(term != "(Intercept)")
+
+ggplot(model_coef, aes(x = estimate, y = reorder(term, estimate))) +
+  geom_point() +
+  geom_errorbarh(aes(xmin=conf.low, xmax=conf.high), height=0.2) +
+  geom_vline(xintercept=0, linetype="dashed", color="red") +
+  labs(x = "Coefficient Estimate", y = "Variable",
+       title = "Coefficients and 95% CI") +
+  theme_minimal()
+```
+
+```{r}
+library(ggplot2)
+
+df_usa_2020$school_closing <- factor(df_usa_2020$school_closing,
+                                     levels = c(0,1,2,3),
+                                     labels = c("No measures",
+                                                "Recommended/some alterations",
+                                                "Require closing some levels",
+                                                "Require closing all"))
+
+ggplot(df_usa_2020, aes(x = school_closing, y = cases_per_million)) +
+  geom_boxplot() +
+  labs(x = "School Closing Category", y = "Cases per Million",
+       title = "Boxplot of Cases per Million by School Closing Category") +
+  theme_minimal()
+```
+
+```{r}
+df_usa_2020$facial_coverings <- factor(df_usa_2020$facial_coverings,
+                                       levels = c(0, 1, 2, 3, 4),
+                                       labels = c("No policy",
+                                                  "Recommended",
+                                                  "Required in some public",
+                                                  "Required in all public",
+                                                  "Required everywhere"))
+ggplot(df_usa_2020, aes(x =  facial_coverings, y = cases_per_million)) +
+  geom_boxplot() +
+  labs(x = "Facial Coverings Policy Level", y = "Cases per Million",
+       title = "Cases per Million by Facial Coverings Policy Level") +
+  theme_minimal()
+```
+
+# 
